@@ -1,2 +1,2 @@
 # forest_job_creation
-This project highlights my data wrangling and merging skills. I cleaned and merged three datasets from different sources using R, and used the combined data to conduct a data-driven analysis that could inform potential policy proposals.
+This project highlights my data wrangling and shiny dynamic dashboard skills. I cleaned and merged three datasets from different sources using R, and used the combined data to conduct a data-driven analysis that could inform potential policy proposals. I then presented key metrics and visualizations to update clients how forest protection would help job creation in California in a clear and interactive way.
