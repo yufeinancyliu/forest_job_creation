@@ -1,5 +1,5 @@
 ---
-title: "TNC_Nancy"
+title: "Nancy"
 author: "Nancy Liu"
 date: "2025-01-27"
 output: pdf_document
