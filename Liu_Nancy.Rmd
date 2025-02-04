@@ -1,0 +1,370 @@
+---
+title: "TNC_Nancy"
+author: "Nancy Liu"
+date: "2025-01-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Load necessary packages
+library(dplyr)
+library(readr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+```
+
+```{r}
+# Step 1: Read and filter Congressional district data ---------------------------------------------------
+districts <- read_csv("data/districts_counties.csv") %>%
+  filter(district_congress == 23) %>%
+  filter(state == 'California') %>%
+  distinct(fips)  # Remove potential duplicate fips
+
+# Extract fips list (convert to character type to ensure matching)
+target_congress <- as.character(districts$fips)
+```
+```{r}
+# Step 2: Read and filter employment data -----------------------------------------------------
+employment <- read_csv("data/counties_employment.csv")
+```
+
+```{r}
+# Step 3: Read and filter unemployment data -----------------------------------------------------
+# Note: Assume counties_unemployment.csv contains a column named "fips"
+unemployment <- read_csv("data/counties_unemployment.csv") %>%
+  mutate(fips = as.character(fips))  # Ensure fips type consistency
+```
+
+
+
+```{r}
+# Verify results
+cat("Number of matching counties:", length(target_congress), "\n")
+cat("Number of rows in filtered employment data:", nrow(employment), "\n")
+cat("Number of rows in filtered unemployment data:", nrow(unemployment), "\n")
+```
+
+
+
+
+## Data Cleaning 
+
+```{r}
+# Reshape from wide to long format (including year)
+unemployment_long <- unemployment %>%
+  # Convert wide format to long format
+  pivot_longer(
+    cols = -c(fips, state, county),
+    names_to = c("month_year", "variable"),
+    names_sep = "_",
+    values_to = "value"
+  ) %>%
+  # Split month and year
+  mutate(
+    month = str_sub(month_year, 1, 3),  # Extract month abbreviation (e.g., jan)
+    year = str_sub(month_year, 4, 7)    # Extract year (e.g., 2019)
+  ) %>%
+  # Convert back to wide format (split by unemp and labor)
+  pivot_wider(
+    names_from = variable,
+    values_from = value
+  ) %>%
+  # Select and reorder columns (including year)
+  select(fips, state, county, year, month, unemp, labor) %>%
+  # Standardize month format (optional)
+  mutate(
+    month = factor(
+      tolower(month),
+      levels = tolower(month.abb),
+      labels = month.abb
+    ),
+    year = as.integer(year)  # Convert year to numeric type
+  )
+
+# View results
+head(unemployment_long)
+
+```
+
+```{r}
+# 1. Standardize the month format
+unemployment_final <- unemployment_long %>%
+  mutate(
+    month = substr(tolower(month), 1, 3),
+    month = factor(tolower(month), levels = tolower(month.abb), labels = month.abb),
+    year = as.integer(year)
+  )
+
+# 2. Handle missing values
+unemployment_final <- unemployment_final %>%
+  filter(!is.na(year) & !is.na(month))
+
+# 3. Create a date column
+unemployment_final <- unemployment_final %>%
+  mutate(
+    date = ymd(paste(year, month, "01", sep = "-"))
+  )
+
+# Step 2: Calculate unemployment rate (rounded to two decimal places)
+unemployment_final <- unemployment_final %>%
+  mutate(
+    unemp_rate = round((unemp / labor) * 100, 2)
+  )
+
+```
+
+
+```{r}
+# emp = (unemp_rate / 100) * unemp
+
+# Calculate emp (employment) using unemp_rate and unemp (population)
+unemployment_final <- unemployment_final %>%
+  mutate(emp = (unemp_rate / 100) * unemp)
+
+```
+
+
+```{r}
+# Create a mapping table for industries based on the provided NAICS codes
+naics_mapping <- data.frame(
+  naics_code = c("11", "21", "23", "31-33", "42", "44-45", "48-49", "22", "51", 
+                 "52", "53", "54", "55", "56", "61", "62", "71", "72", "81", "92"),
+  industry = c("Agriculture, forestry, fishing and hunting",
+               "Mining, quarrying, and oil and gas extraction",
+               "Construction",
+               "Manufacturing",
+               "Wholesale trade",
+               "Retail trade",
+               "Transportation and warehousing",
+               "Utilities",
+               "Information",
+               "Finance and insurance",
+               "Real estate and rental and leasing",
+               "Professional, scientific, and technical services",
+               "Management of companies and enterprises",
+               "Administrative and support and waste management services",
+               "Educational services",
+               "Health care and social assistance",
+               "Arts, entertainment, and recreation",
+               "Accommodation and food services",
+               "Other services, except public administration",
+               "Public administration")
+)
+```
+
+
+```{r}
+# Import Insurance data
+
+# Import the CSV file
+insurance_data <- read_csv("data/states_unemployment.csv")
+```
+```{r}
+# Clean Insurance data
+
+# Replace "_ina" with NA
+insurance_data[insurance_data == "_ina"] <- NA
+
+# Check for missing values
+summary(insurance_data)
+
+# Convert 'date' column from "jan2019" format to Date format (assuming the month abbreviation is in lowercase)
+insurance_data$date <- as.Date(paste0(insurance_data$date, "01"), format = "%b%Y%d")
+
+
+# Convert to long format (assuming the columns to be pivoted start with "naics_" as in your previous example)
+insurance_data_long <- insurance_data %>%
+  pivot_longer(
+    cols = starts_with("naics_"),  # Select all columns starting with "naics_"
+    names_to = "naics_code",       # New column name: NAICS code (e.g., "total", "11", "21")
+    names_prefix = "naics_",       # Remove prefix "naics_"
+    values_to = "naics_value"      # New column name: corresponding values
+  )
+
+# Check the transformed data
+head(insurance_data_long)
+```
+```{r}
+# Save final_data as a CSV file for R shiny
+write.csv(insurance_data_long, "insurance_data_long.csv", row.names = FALSE)
+```
+
+
+## Task 1 Analysis
+
+```{r}
+unemployment_analysis <- unemployment_final %>%
+  filter(fips %in% target_congress)  # Filter matching counties
+
+# Group by date and calculate the average unemployment rate
+trend_data <- unemployment_analysis %>%
+  group_by(date) %>%
+  summarise(avg_unemp_rate = mean(unemp_rate, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+
+
+
+## Line Chart
+
+```{r}
+# Plot line chart (using the date column directly)
+ggplot(trend_data, aes(x = date, y = avg_unemp_rate)) +
+  geom_line(color = "#4A90E2", linewidth = 1) +  # TNC brand blue
+  geom_point(color = "#50B83C", size = 2) +      # TNC brand green
+  labs(
+    title = "Unemployment Rate Trend in California's 23rd Congressional District (July 2019 - July 2020)",
+    x = "Date", 
+    y = "Average Unemployment Rate (%)",
+    caption = "Source: U.S. Bureau of Labor Statistics"
+  ) +
+  theme_minimal() +
+  scale_x_date(
+    date_labels = "%Y-%m",    # Display year-month format (keeping ISO standard)
+    date_breaks = "2 months", # Every two months a tick
+    limits = c(as.Date("2019-07-01"), as.Date("2020-07-31")) # Fixed X-axis range
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+employment_long <- employment %>%
+  filter(fips %in% target_congress)  %>% # Filter matching counties
+  pivot_longer(
+    cols = starts_with("naics_"),  # Select all columns starting with "naics_"
+    names_to = "naics_code",       # New column name: NAICS code (e.g., "total", "11", "21")
+    names_prefix = "naics_",       # Remove prefix "naics_"
+    values_to = "naics_value"      # New column name: corresponding values
+  ) %>%
+  # Retain target variables
+  select(fips, state, county, naics_code, naics_value)
+
+
+# Calculate total employment for each county (exclude possible "total" rows)
+total_employment <- employment_long %>%
+  group_by(fips) %>%
+  summarise(total_emp = sum(naics_value, na.rm = TRUE)) %>%
+  ungroup()
+
+# Merge total employment into original data
+employment_with_total <- employment_long %>%
+  left_join(total_employment, by = "fips")
+
+# Calculate employment share of each industry for each county
+industry_share <- employment_with_total %>%
+  # Join industry names
+  left_join(naics_mapping, by = "naics_code") %>%
+  # Exclude invalid data (total employment is 0 or missing)
+  filter(total_emp > 0 & !is.na(total_emp)) %>%
+  # Calculate employment share
+  mutate(
+    employment_share = (naics_value / total_emp) * 100
+  ) %>%
+  # Group by industry and calculate national average share
+  group_by(industry) %>%
+  summarise(
+    avg_share = mean(employment_share, na.rm = TRUE) %>% round(1)
+  ) %>%
+  arrange(desc(avg_share))
+
+# Define target industries
+target_industries <- c(
+  "Agriculture, forestry, fishing and hunting",
+  "Construction"
+)
+
+industry_share <- industry_share %>%
+  filter(!is.na(industry))
+
+# Filter target industries and top other industries by share
+top_other_industries <- industry_share %>%
+  filter(!(industry %in% target_industries)) %>%
+  slice_max(avg_share, n = 3)  # Select top 3 other industries
+
+# Combine the results
+final_table <- bind_rows(
+  industry_share %>% filter(industry %in% target_industries),
+  top_other_industries
+) %>%
+  arrange(desc(avg_share))
+
+```
+
+
+
+```{r}
+knitr::kable(
+  final_table,
+  col.names = c("Industry", "National Average Employment Share (%)"),
+  caption = "Comparison of Key Industries by Employment Share"
+)
+
+```
+
+
+```{r}
+ggplot(final_table, aes(x = reorder(industry, avg_share), y = avg_share)) +
+  geom_col(fill = "#4A90E2") +  # TNC brand blue
+  geom_text(aes(label = paste0(avg_share, "%")), hjust = -0.1, color = "grey30", size = 3.5) +
+  labs(
+    title = "Employment Share Comparison: Key Industries",
+    x = "Industry",
+    y = "California Average Employment Share (%)",
+    caption = "Source: U.S. Census Bureau American Community Survey"
+  ) +
+  coord_flip() +  # Horizontal bar chart
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+
+## R shiny
+
+```{r}
+# transform insurance and umemployment data into state level
+# Group insurance_data_long by fips and date, sum naics_value as insurance, and drop fips and date
+insurance_grouped <- insurance_data_long %>%
+  group_by(state, date) %>%
+  summarise(insurance = sum(naics_value, na.rm = TRUE)) %>%
+  ungroup()  # Remove grouping
+
+# Group unemployment_final by fips and calculate emp (employment) from unemp and unemp_rate
+unemployment_final <- unemployment_final %>%
+  mutate(emp = (unemp / unemp_rate)) %>%
+  group_by(state) %>%
+  summarise(
+    total_unemp = sum(unemp, na.rm = TRUE),  # Sum of unemp by fips
+    total_emp = sum(emp, na.rm = TRUE)       # Sum of emp by fips
+  ) %>%
+  ungroup()  # Drop grouping by fips
+
+```
+
+
+```{r}
+# Merge the grouped insurance_data_long with the grouped unemployment_final using a left join
+final_data <- insurance_grouped %>%
+  left_join(unemployment_final, by = "state")
+
+# Check the merged data
+head(final_data)
+```
+
+```{r}
+# Save final_data as a CSV file for R shiny
+write.csv(final_data, "final_data.csv", row.names = FALSE)
+
+```
+
+
